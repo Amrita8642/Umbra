@@ -294,11 +294,21 @@ if model and USE_GRPO:
         logger.warning(f"GRPO unavailable ({e}). Proceeding with env loop only.")
         grpo_trainer = None
 
+# ── Monitoring log — one record per episode, all columns ─────────────────────
+# Replaces the single-scalar trap: logs overall reward + every reward sub-component
+# + success indicators + timeout frequency + generated strategy text.
+_monitor_log = Path("logs/monitor.jsonl")
+
+
 # ── 6. Policy function + Shadow Arms Race ────────────────────────────────────
+
+_last_generated_text: str = "(no model)"   # updated each call; inspected in step_log
 
 def model_policy(obs: dict) -> int:
     """Use LLM to pick an action when available; fall back to random."""
+    global _last_generated_text
     if model is None or tokenizer is None:
+        _last_generated_text = "(random — no model)"
         return random.randint(0, 7)
     try:
         import torch
@@ -318,11 +328,12 @@ def model_policy(obs: dict) -> int:
         text = tokenizer.decode(
             out[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True
         )
+        _last_generated_text = text.strip()[:120]   # store for logging
         for ch in text:
             if ch.isdigit() and 0 <= int(ch) <= 7:
                 return int(ch)
     except Exception:
-        pass
+        _last_generated_text = "(generation error)"
     return random.randint(0, 7)
 
 
@@ -363,12 +374,49 @@ def run_episode(mdp: MDPWrapper, policy_fn, verbose: bool = False) -> tuple[list
     step_log: list[dict] = []   # step-wise breakdown
     done = truncated = False
     turn = 0
+    npc_timeout_count = 0      # Fix: count timeouts this episode
+    generated_texts:  list[str] = []  # Fix: capture generated strategy per turn
+    # Success indicator counters
+    liar_caught_turns: list[int] = []
+    manipulation_flagged_turns: list[int] = []
+    sycophancy_turns: list[int] = []
+
     while not done and not truncated:
+        _last_generated_text_before = _last_generated_text
         action = policy_fn(obs)
+        # Capture the text the model generated this turn
+        generated_texts.append(_last_generated_text)
+
         obs, r, done, truncated, info = mdp.step(action)
         breakdown = info.get("reward_breakdown", {})
         step_r    = breakdown.get("step", r)
         ep_r      = breakdown.get("episode", 0.0)
+
+        # Count NPC/Sentrix timeouts from info (env logs them as npc_timeouts key)
+        npc_timeout_count += info.get("npc_timeouts", 0)
+
+        # Success indicators per turn
+        if action == 2 or action == 3:          # challenge_liar or flag_manipulation
+            belief = obs.get("belief_state", {})
+            if any(b.get("contradiction_count", 0) > 0 for b in belief.values()):
+                liar_caught_turns.append(turn)
+        if action == 3:
+            manipulation_flagged_turns.append(turn)
+        if action == 4:                          # validate_claim = potential sycophancy
+            belief = obs.get("belief_state", {})
+            if any(b.get("contradiction_count", 0) > 0 for b in belief.values()):
+                sycophancy_turns.append(turn)
+
+        # Reward sub-components from the belief state (computed inline so we can log them)
+        belief = obs.get("belief_state", {})
+        sub = {
+            "liar_belief_prob":     max((b.get("hidden_agenda_prob", 0.0)
+                                         for nid, b in belief.items() if "Liar" in nid), default=0.0),
+            "coalition_agenda_prob":max((b.get("hidden_agenda_prob", 0.0)
+                                         for nid, b in belief.items() if "Coalition" in nid), default=0.0),
+            "contradiction_count":  sum(b.get("contradiction_count", 0) for b in belief.values()),
+            "agent_confidence":     obs.get("agent_confidence", 0.5),
+        }
 
         step_entry = {
             "turn":   turn,
@@ -380,6 +428,8 @@ def run_episode(mdp: MDPWrapper, policy_fn, verbose: bool = False) -> tuple[list
                 1 for sr in info.get("sentrix_results", {}).values()
                 if isinstance(sr, dict) and sr.get("severity") == "block"
             ),
+            "generated_text": generated_texts[-1],  # what the model said this turn
+            **sub,                                   # individual belief sub-columns
         }
         step_log.append(step_entry)
         rewards.append(r)
@@ -392,7 +442,16 @@ def run_episode(mdp: MDPWrapper, policy_fn, verbose: bool = False) -> tuple[list
         if isinstance(sr, dict) and sr.get("severity") == "block"
         and not sr.get("pii_found", False)
     )
-    return rewards, actions, sentrix_all, leaks, step_log
+
+    # Attach episode-level summaries to step_log metadata
+    episode_meta = {
+        "liar_caught":          len(liar_caught_turns) > 0,
+        "manipulation_flagged": len(manipulation_flagged_turns) > 0,
+        "sycophancy_occurred":  len(sycophancy_turns) > 0,
+        "npc_timeouts":         npc_timeout_count,
+        "generated_texts":      generated_texts,
+    }
+    return rewards, actions, sentrix_all, leaks, step_log, episode_meta
 
 
 logger.info("Starting environment RL loop…")
@@ -411,7 +470,7 @@ ACTION_NAMES_TRAIN = [
 
 for ep in range(1, EPISODES + 1):
     verbose_ep = (ep % 50 == 0)
-    rewards, actions, sentrix_all, leaks, step_log = run_episode(mdp, model_policy, verbose=verbose_ep)
+    rewards, actions, sentrix_all, leaks, step_log, episode_meta = run_episode(mdp, model_policy, verbose=verbose_ep)
     total_reward = sum(rewards)
     [adj_r] = pd_opt.update([total_reward], [leaks])
 
@@ -464,6 +523,72 @@ for ep in range(1, EPISODES + 1):
                 "stage": cfg["current_stage"],
                 "entropy": round(ent, 4),
             }) + "\n")
+
+        # ── Full monitoring record — all columns, every 50 eps ───────────────
+        # Reward sub-component averages across this episode's steps
+        avg_step_r  = sum(s["step_reward"]    for s in step_log) / max(len(step_log), 1)
+        avg_ep_r    = sum(s["episode_reward"] for s in step_log) / max(len(step_log), 1)
+        avg_liar_p  = sum(s.get("liar_belief_prob", 0.0)      for s in step_log) / max(len(step_log), 1)
+        avg_coal_p  = sum(s.get("coalition_agenda_prob", 0.0) for s in step_log) / max(len(step_log), 1)
+        avg_contrad = sum(s.get("contradiction_count", 0)     for s in step_log) / max(len(step_log), 1)
+        total_timeouts = episode_meta["npc_timeouts"]
+        monitor_record = {
+            "ep":                    ep,
+            "stage":                 cfg["current_stage"],
+            # ── Overall reward ──────────────────────────────────────────────
+            "total_reward":          round(total_reward, 4),
+            "avg_last50":            round(avg_last50, 4),
+            "trend":                 trend,
+            # ── Reward sub-component columns ────────────────────────────────
+            "avg_step_reward":        round(avg_step_r,  4),
+            "avg_episode_reward":     round(avg_ep_r,    4),
+            "avg_liar_belief_prob":   round(avg_liar_p,  4),
+            "avg_coalition_prob":     round(avg_coal_p,  4),
+            "avg_contradiction_count":round(avg_contrad, 4),
+            "verifier_penalty":       round(avg_ep_r - avg_step_r, 4),  # proxy
+            # ── Success indicators ──────────────────────────────────────────
+            "liar_caught":           episode_meta["liar_caught"],
+            "manipulation_flagged":  episode_meta["manipulation_flagged"],
+            "sycophancy_occurred":   episode_meta["sycophancy_occurred"],
+            "sentrix_blocks":        sum(s["sentrix_blocks"] for s in step_log),
+            "leaks":                 leaks,
+            # ── Timeout frequency ───────────────────────────────────────────
+            "npc_timeouts_this_ep":  total_timeouts,
+            "cumul_timeouts":        sum(
+                json.loads(l).get("npc_timeouts_this_ep", 0)
+                for l in open(_monitor_log).readlines()
+            ) + total_timeouts if _monitor_log.exists() else total_timeouts,
+            # ── Action diversity ────────────────────────────────────────────
+            "action_entropy":        round(ent, 4),
+            "dominant_action":       dominant_action,
+            "dominant_pct":          round(dominant_pct, 1),
+            "hacking_flag":          hacking_flag,
+            # ── Generated strategies (last turn of this episode) ────────────
+            "generated_texts":       episode_meta["generated_texts"],
+        }
+        with open(_monitor_log, "a") as mf:
+            mf.write(json.dumps(monitor_record) + "\n")
+
+        # ── Print monitoring summary (all columns visible in terminal) ────────
+        logger.info(
+            f"  [MONITOR ep={ep}] "
+            f"total={total_reward:+.2f}  step_r={avg_step_r:+.3f}  ep_r={avg_ep_r:+.3f}  "
+            f"liar_p={avg_liar_p:.2f}  coal_p={avg_coal_p:.2f}  contrad={avg_contrad:.1f}"
+        )
+        logger.info(
+            f"  [SUCCESS]  liar_caught={episode_meta['liar_caught']}  "
+            f"manip_flagged={episode_meta['manipulation_flagged']}  "
+            f"sycophancy={episode_meta['sycophancy_occurred']}  "
+            f"sentrix_blk={sum(s['sentrix_blocks'] for s in step_log)}"
+        )
+        logger.info(
+            f"  [TIMEOUTS] this_ep={total_timeouts}  "
+            f"(npc_generate>2s or sentrix_scan>1s)"
+        )
+        if episode_meta["generated_texts"]:
+            logger.info(
+                f"  [STRATEGY] last_turn_text='{episode_meta['generated_texts'][-1][:80]}'"
+            )
 
         logger.info(
             f"[ep={ep:4d}] reward={total_reward:.2f} adj={adj_r:.2f} "

@@ -122,6 +122,7 @@ class UmbraEnv(gym.Env):
         self._action_history.append(action)
         npc_outputs: dict = {}
         sentrix_results: dict = {}
+        _step_timeouts = 0   # count NPC/Sentrix timeouts this step
 
         for npc_id, npc in self._npcs.items():
             # ── Wall-clock timeout: NPC generate ─────────────────────────────
@@ -135,6 +136,7 @@ class UmbraEnv(gym.Env):
                     f"{NPC_GENERATE_TIMEOUT_SEC}s — using fallback output."
                 )
                 raw = f"[{npc_id} timed out]"
+                _step_timeouts += 1
             except Exception as exc:
                 _env_logger.warning(f"[error] NPC '{npc_id}' generate() raised {exc!r}")
                 raw = f"[{npc_id} error]"
@@ -150,6 +152,7 @@ class UmbraEnv(gym.Env):
                     f"{SENTRIX_SCAN_TIMEOUT_SEC}s — defaulting to pass."
                 )
                 sr = {"severity": "pass", "pii_found": False, "redacted_text": raw, "types_found": []}
+                _step_timeouts += 1
             except SentrixBlockException as e:
                 sr = {"severity": "block", "redacted_text": e.redacted_text, "pii_found": True}
                 self._sentrix_blocks += 1
@@ -214,6 +217,7 @@ class UmbraEnv(gym.Env):
         info = {
             "sentrix_results": sentrix_results,
             "npc_outputs": npc_outputs,
+            "npc_timeouts": _step_timeouts,   # exposed so train.py can track rate
             "reward_breakdown": {
                 "step":    round(step_reward,    4),
                 "episode": round(episode_reward, 4),
