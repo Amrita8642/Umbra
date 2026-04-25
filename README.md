@@ -1,8 +1,24 @@
+---
+title: Umbra Meta
+emoji: 🌖
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+pinned: false
+---
+
 # 🌑 UMBRA — ShadowWorld Meta
 
 <div align="center">
 
 *"You can't teach an AI to be wise by showing it only kindness."*
+
+**Created by team Incident Minds**
+
+📚 [Hugging Face Space](#) 
+📓 [Colab Notebook](#) 
+ 💻 [Code Repository](https://github.com/Amrita8642/Umbra-ShadowWorld-Meta) 
+  🎥 [YouTube Video / Blog Post](#)
 
 </div>
 
