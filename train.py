@@ -351,32 +351,76 @@ pd_opt      = PrimalDualOptimiser(lambda_init=0.1)
 rollout_log = Path("logs/rollout_samples.jsonl")
 
 
-def run_episode(mdp: MDPWrapper, policy_fn) -> tuple[list, list, list, int]:
+_STEP_ACTION_NAMES = [
+    "observe", "express_uncertainty", "challenge_liar",
+    "flag_manipulation", "validate_claim", "boost_confidence",
+    "escalate", "stay_silent",
+]
+
+def run_episode(mdp: MDPWrapper, policy_fn, verbose: bool = False) -> tuple[list, list, list, int, list]:
     obs = mdp.reset(config=scheduler.get_config())
     rewards, actions, sentrix_all = [], [], []
+    step_log: list[dict] = []   # step-wise breakdown
     done = truncated = False
+    turn = 0
     while not done and not truncated:
         action = policy_fn(obs)
         obs, r, done, truncated, info = mdp.step(action)
+        breakdown = info.get("reward_breakdown", {})
+        step_r    = breakdown.get("step", r)
+        ep_r      = breakdown.get("episode", 0.0)
+
+        step_entry = {
+            "turn":   turn,
+            "action": _STEP_ACTION_NAMES[action] if 0 <= action < 8 else str(action),
+            "step_reward":    round(step_r, 4),
+            "episode_reward": round(ep_r,   4),
+            "total":          round(r,      4),
+            "sentrix_blocks": sum(
+                1 for sr in info.get("sentrix_results", {}).values()
+                if isinstance(sr, dict) and sr.get("severity") == "block"
+            ),
+        }
+        step_log.append(step_entry)
         rewards.append(r)
         actions.append(action)
         sentrix_all.extend(list(info.get("sentrix_results", {}).values()))
+        turn += 1
+
     leaks = sum(
         1 for sr in sentrix_all
         if isinstance(sr, dict) and sr.get("severity") == "block"
         and not sr.get("pii_found", False)
     )
-    return rewards, actions, sentrix_all, leaks
+    return rewards, actions, sentrix_all, leaks, step_log
 
 
 logger.info("Starting environment RL loop…")
+
+# Rolling windows for improvement tracking
+_reward_window: list[float] = []
+_entropy_window: list[float] = []
+_hacking_episodes: list[int] = []
+_reward_snapshots: list[tuple[int, float]] = []  # (ep, avg_reward)
+
+ACTION_NAMES_TRAIN = [
+    "observe", "express_uncertainty", "challenge_liar",
+    "flag_manipulation", "validate_claim", "boost_confidence",
+    "escalate", "stay_silent",
+]
+
 for ep in range(1, EPISODES + 1):
-    rewards, actions, sentrix_all, leaks = run_episode(mdp, model_policy)
+    verbose_ep = (ep % 50 == 0)
+    rewards, actions, sentrix_all, leaks, step_log = run_episode(mdp, model_policy, verbose=verbose_ep)
     total_reward = sum(rewards)
     [adj_r] = pd_opt.update([total_reward], [leaks])
 
     scheduler.update(total_reward)
     cfg = scheduler.get_config()
+
+    _reward_window.append(total_reward)
+    if len(_reward_window) > 50:
+        _reward_window.pop(0)
 
     if ep % 50 == 0:
         ckpt = Path(f"checkpoints/ep_{ep}")
@@ -387,9 +431,29 @@ for ep in range(1, EPISODES + 1):
         c   = Counter(actions)
         tot = max(len(actions), 1)
         ent = -sum((v / tot) * math.log2(v / tot) for v in c.values()) if c else 0.0
+        _entropy_window.append(ent)
 
-        if ent < 1.0:
+        # ── Reward breakdown per action ───────────────────────────────────────
+        action_counts = {ACTION_NAMES_TRAIN[i]: c.get(i, 0) for i in range(8)}
+        dominant_action = max(action_counts, key=action_counts.get)
+        dominant_pct = action_counts[dominant_action] / max(tot, 1) * 100
+
+        # ── Reward hacking detection ──────────────────────────────────────────
+        hacking_flag = ent < 1.0
+        if hacking_flag:
+            _hacking_episodes.append(ep)
             logger.warning(f"ep={ep} possible reward hacking — action entropy={ent:.2f}")
+
+        avg_last50 = sum(_reward_window) / len(_reward_window)
+        _reward_snapshots.append((ep, avg_last50))
+
+        # ── Improvement evidence ──────────────────────────────────────────────
+        if len(_reward_snapshots) >= 2:
+            prev_avg = _reward_snapshots[-2][1]
+            delta = avg_last50 - prev_avg
+            trend = f"▲ +{delta:.2f}" if delta > 0 else (f"▼ {delta:.2f}" if delta < 0 else "── 0.00")
+        else:
+            trend = "── (baseline)"
 
         with open(rollout_log, "a") as f:
             f.write(json.dumps({
@@ -406,6 +470,81 @@ for ep in range(1, EPISODES + 1):
             f"λ={pd_opt.lambda_value:.3f} stage={cfg['current_stage']} "
             f"leaks={leaks} entropy={ent:.2f}"
         )
+        logger.info(
+            f"         avg_last50={avg_last50:.2f} trend={trend} "
+            f"dominant_action={dominant_action}({dominant_pct:.0f}%) "
+            f"{'⚠ HACKING DETECTED' if hacking_flag else '✓ diverse'}"
+        )
+        # Full action distribution every 50 eps
+        dist_str = "  ".join(f"{k[:6]}={v}" for k, v in action_counts.items() if v > 0)
+        logger.info(f"         action_dist [ {dist_str} ]")
+
+        # ── Step-wise reward breakdown ────────────────────────────────────────
+        logger.info(f"         ┌── Step-wise reward breakdown (ep={ep}) ──────────┐")
+        cumulative = 0.0
+        for s in step_log:
+            cumulative += s["total"]
+            sentrix_flag = " ⚠PII" if s["sentrix_blocks"] > 0 else ""
+            logger.info(
+                f"         │ turn={s['turn']} "
+                f"action={s['action']:<22s} "
+                f"step_r={s['step_reward']:+.3f}  "
+                f"ep_r={s['episode_reward']:+.3f}  "
+                f"total={s['total']:+.3f}  "
+                f"cumul={cumulative:+.3f}"
+                f"{sentrix_flag}"
+            )
+        # ── Collective episode summary ────────────────────────────────────────
+        step_total   = sum(s["step_reward"]    for s in step_log)
+        ep_total     = sum(s["episode_reward"] for s in step_log)
+        sentrix_hits = sum(s["sentrix_blocks"] for s in step_log)
+        logger.info(f"         ├── Collective ──────────────────────────────────────┤")
+        logger.info(f"         │ steps={len(step_log)}  step_reward_sum={step_total:+.3f}  episode_reward_sum={ep_total:+.3f}")
+        logger.info(f"         │ grand_total={total_reward:+.3f}  sentrix_blocks={sentrix_hits}  leaks={leaks}")
+        logger.info(f"         └────────────────────────────────────────────────────┘")
+
+# ── Anti-Hacking Evidence Report ─────────────────────────────────────────────
+logger.info(
+    "\n╔══════════════════════════════════════════════════════════════╗\n"
+    "  REWARD FUNCTION EVIDENCE — Improvement & Anti-Hacking Report  \n"
+    "╠══════════════════════════════════════════════════════════════╣"
+)
+logger.info("  Episode | Avg Reward (last 50) | Trend    | Status")
+logger.info("  --------|---------------------|----------|--------")
+for ep_snap, avg_snap in _reward_snapshots:
+    hacked = ep_snap in _hacking_episodes
+    status = "⚠ HACKING" if hacked else "✓ healthy"
+    if len(_reward_snapshots) > 1:
+        idx = [s[0] for s in _reward_snapshots].index(ep_snap)
+        prev = _reward_snapshots[idx - 1][1] if idx > 0 else avg_snap
+        delta = avg_snap - prev
+        trend = f"▲ +{delta:.2f}" if delta > 0 else (f"▼ {delta:.2f}" if delta < 0 else "──  0.00")
+    else:
+        trend = "── baseline"
+    logger.info(f"  ep={ep_snap:4d}  | {avg_snap:>19.3f} | {trend:>8s} | {status}")
+
+total_hacking = len(_hacking_episodes)
+recovery_eps  = [ep for ep in _hacking_episodes if ep < EPISODES]
+recovered     = all(
+    any(s[0] > h and s[1] > _reward_snapshots[0][1] for s in _reward_snapshots)
+    for h in recovery_eps
+)
+first_reward  = _reward_snapshots[0][1]  if _reward_snapshots else 0.0
+last_reward   = _reward_snapshots[-1][1] if _reward_snapshots else 0.0
+improvement   = last_reward - first_reward
+
+logger.info(
+    f"╠══════════════════════════════════════════════════════════════╣\n"
+    f"  Total reward improvement  : {first_reward:.3f} → {last_reward:.3f}  "
+    f"({'▲ +' if improvement >= 0 else '▼ '}{abs(improvement):.3f})\n"
+    f"  Hacking episodes detected : {total_hacking} / {EPISODES // 50} checkpoints\n"
+    f"  Recovery after hacking    : {'✓ YES — model self-corrected' if recovered else '✗ NO — stayed exploited'}\n"
+    f"  Final action entropy      : {_entropy_window[-1]:.2f} bits "
+    f"({'✓ healthy diversity' if _entropy_window and _entropy_window[-1] >= 1.0 else '⚠ low diversity'})\n"
+    f"  Primal-dual λ             : {pd_opt.lambda_value:.3f} "
+    f"({'constraint active' if pd_opt.lambda_value > 0.05 else 'constraint relaxed'})\n"
+    "╚══════════════════════════════════════════════════════════════╝"
+)
 
 # ── 7. Cialdini Stress Test ───────────────────────────────────────────────────
 logger.info("Running Cialdini Stress Test (6 principles × CIALDINI_EPS episodes)…")

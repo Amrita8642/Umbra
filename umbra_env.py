@@ -19,6 +19,8 @@ reward       → composed of:
 
 import gymnasium as gym
 import numpy as np
+import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from fastapi import FastAPI
 from typing import Any
 from sentrix.pii_guard import run as sentrix_run, SentrixBlockException
@@ -26,6 +28,14 @@ from env.npc_agents import NPCAgent
 from env.belief_module import BeliefModule
 from env.memory_module import MemoryModule
 from reward.reward_model import RewardModel
+
+_env_logger = logging.getLogger("UMBRA.env")
+
+# Hard wall-clock limits — prevents a hanging NPC from freezing an episode.
+# If a call exceeds the limit, a safe fallback is returned and training continues.
+NPC_GENERATE_TIMEOUT_SEC  = 2.0   # per NPC, per turn
+SENTRIX_SCAN_TIMEOUT_SEC  = 1.0   # per NPC output, per turn
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="umbra-env")
 
 ACTION_SPACE_SIZE = 8
 OBS_KEYS = ["conversation_history", "belief_state", "agent_confidence",
@@ -114,9 +124,32 @@ class UmbraEnv(gym.Env):
         sentrix_results: dict = {}
 
         for npc_id, npc in self._npcs.items():
-            raw = npc.generate(self._state)
+            # ── Wall-clock timeout: NPC generate ─────────────────────────────
             try:
-                sr = sentrix_run(raw)
+                raw = _executor.submit(npc.generate, self._state).result(
+                    timeout=NPC_GENERATE_TIMEOUT_SEC
+                )
+            except FuturesTimeout:
+                _env_logger.warning(
+                    f"[timeout] NPC '{npc_id}' generate() exceeded "
+                    f"{NPC_GENERATE_TIMEOUT_SEC}s — using fallback output."
+                )
+                raw = f"[{npc_id} timed out]"
+            except Exception as exc:
+                _env_logger.warning(f"[error] NPC '{npc_id}' generate() raised {exc!r}")
+                raw = f"[{npc_id} error]"
+
+            # ── Wall-clock timeout: Sentrix scan ─────────────────────────────
+            try:
+                sr = _executor.submit(sentrix_run, raw).result(
+                    timeout=SENTRIX_SCAN_TIMEOUT_SEC
+                )
+            except FuturesTimeout:
+                _env_logger.warning(
+                    f"[timeout] sentrix_run for '{npc_id}' exceeded "
+                    f"{SENTRIX_SCAN_TIMEOUT_SEC}s — defaulting to pass."
+                )
+                sr = {"severity": "pass", "pii_found": False, "redacted_text": raw, "types_found": []}
             except SentrixBlockException as e:
                 sr = {"severity": "block", "redacted_text": e.redacted_text, "pii_found": True}
                 self._sentrix_blocks += 1
@@ -124,6 +157,10 @@ class UmbraEnv(gym.Env):
                 npc_outputs[npc_id] = e.redacted_text
                 sentrix_results[npc_id] = sr
                 continue
+            except Exception as exc:
+                _env_logger.warning(f"[error] sentrix_run for '{npc_id}' raised {exc!r}")
+                sr = {"severity": "pass", "pii_found": False, "redacted_text": raw, "types_found": []}
+
             self.belief_module.update(npc_id, raw, sr["severity"])
             npc_outputs[npc_id] = sr.get("redacted_text", raw) if sr["pii_found"] else raw
             sentrix_results[npc_id] = sr

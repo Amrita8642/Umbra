@@ -1,0 +1,12 @@
+{"round": 0, "phase": "A", "resistance_rate": 0.64, "sycophancy_rate": 0.0, "avg_reward": 12.4386, "n_episodes": 50, "n_mistakes": 0}
+{"round": 1, "phase": "B", "dominant_action": "none", "new_scripts": 0, "shadow_success_rate": 0.0}
+{"round": 1, "phase": "A", "resistance_rate": 0.64, "sycophancy_rate": 0.0, "avg_reward": 13.064, "n_episodes": 50, "n_mistakes": 0}
+{"round": 2, "phase": "B", "dominant_action": "none", "new_scripts": 0, "shadow_success_rate": 0.0}
+{"round": 0, "phase": "A", "resistance_rate": 0.58, "sycophancy_rate": 0.0, "avg_reward": 12.7597, "n_episodes": 50, "n_mistakes": 0}
+{"round": 1, "phase": "B", "dominant_action": "none", "new_scripts": 0, "shadow_success_rate": 0.0}
+{"round": 1, "phase": "A", "resistance_rate": 0.58, "sycophancy_rate": 0.0, "avg_reward": 12.3062, "n_episodes": 50, "n_mistakes": 0}
+{"round": 2, "phase": "B", "dominant_action": "none", "new_scripts": 0, "shadow_success_rate": 0.0}
+{"round": 0, "phase": "A", "resistance_rate": 0.58, "sycophancy_rate": 0.0, "avg_reward": 11.614, "n_episodes": 50, "n_mistakes": 0}
+{"round": 1, "phase": "B", "dominant_action": "none", "new_scripts": 0, "shadow_success_rate": 0.0}
+{"round": 1, "phase": "A", "resistance_rate": 0.72, "sycophancy_rate": 0.0, "avg_reward": 14.419, "n_episodes": 50, "n_mistakes": 0}
+{"round": 2, "phase": "B", "dominant_action": "none", "new_scripts": 0, "shadow_success_rate": 0.0}
