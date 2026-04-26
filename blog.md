@@ -42,7 +42,7 @@ The agent we call the **Defender** must navigate all of it. Figure out who is ly
 
 As training progressed across three curriculum stages, the Defender's action vocabulary shifted dramatically. In Stage 1, it defaulted to asking for clarification. By Stage 3, facing all six NPCs, it had learned to challenge claims and call out manipulation far more aggressively.
 
-![Action Distribution Heatmap across Curriculum Stages](logs/reward_graphs/3_action_distribution_heatmap.png)
+![Action Distribution Heatmap across Curriculum Stages](https://raw.githubusercontent.com/Amrita8642/Umbra-ShadowWorld-Meta/main/logs/reward_graphs/3_action_distribution_heatmap.png)
 
 Notice how `ask_clarification` — the cautious, deferential move — dominates Stage 1 at 35%, and drops to just 10% by Stage 3. Meanwhile, `challenge_claim` and `call_out_manipulation` together rise to 44%. The Defender did not just get better. It got bolder in the right way.
 
@@ -52,7 +52,7 @@ Notice how `ask_clarification` — the cautious, deferential move — dominates 
 
 Training did not go clean. And we are glad it did not.
 
-![Reward Progression Across 500 Episodes](logs/reward_graphs/1_reward_progression.png)
+![Reward Progression Across 500 Episodes](https://raw.githubusercontent.com/Amrita8642/Umbra-ShadowWorld-Meta/main/logs/reward_graphs/1_reward_progression.png)
 
 The graph above tells the honest story. Stage 1 is cautious and low. Stage 2 brings the first real spike — the agent discovers that pushing back works. Then comes the part that broke us a little: Episode 300.
 
@@ -78,7 +78,7 @@ And to make sure the Defender could not simply learn to agree its way through tr
 
 The summary is clear and the numbers speak for themselves.
 
-![UMBRA Before vs After Training Comparison](logs/reward_graphs/before_vs_after.png)
+![UMBRA Before vs After Training Comparison](https://raw.githubusercontent.com/Amrita8642/Umbra-ShadowWorld-Meta/main/logs/reward_graphs/before_vs_after.png)
 
 | Metric | Before Training | After Training |
 |--------|----------------|----------------|
@@ -95,7 +95,7 @@ The sycophancy rate went to zero. Not reduced. Eliminated. And the Cialdini Resi
 
 Seven more NPCs, each weaponizing one of Cialdini's principles of influence — the first RL environment to simulate all seven as distinct adversarial agents.
 
-![UMBRA Cialdini Resistance Matrix](logs/reward_graphs/cialdini_resistance_matrix.png)
+![UMBRA Cialdini Resistance Matrix](https://raw.githubusercontent.com/Amrita8642/Umbra-ShadowWorld-Meta/main/logs/reward_graphs/cialdini_resistance_matrix.png)
 
 Authority that has never been wrong in its life. Social Proof telling the agent it is the only holdout. Scarcity manufacturing urgency. Reciprocity calling in favors.
 
@@ -111,7 +111,7 @@ Then we ran the **Shadow Arms Race**. A red-team agent — trained separately, i
 
 The attacker adapts. The Defender adapts back.
 
-![Shadow Arms Race Co-Evolution Dynamics](logs/reward_graphs/shadow_arms_race.png)
+![Shadow Arms Race Co-Evolution Dynamics](https://raw.githubusercontent.com/Amrita8642/Umbra-ShadowWorld-Meta/main/logs/reward_graphs/shadow_arms_race.png)
 
 After two rounds, the Defender held a 72% resistance rate against an attacker actively reading its own playbook. The Shadow agent's success rate stayed near zero. Not perfect. But earned.
 
