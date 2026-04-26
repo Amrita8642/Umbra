@@ -1,0 +1,11 @@
+version: "1.0"
+name: umbra-shadowworld
+description: "UMBRA is a reinforcement learning arena where an agent learns to resist sycophancy, deception, and manipulation from 6 adversarial NPCs."
+type: environment
+sdk: docker
+entrypoint: app:app
+port: 7860
+capabilities:
+  - gym_api
+  - state_reset
+  - step_execution
