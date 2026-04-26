@@ -9,8 +9,6 @@ pinned: false
 
 <div align="center">
 
-<img src="umbra_logo.jpg" alt="UMBRA Logo" width="180">
-
 # 🌑 UMBRA — ShadowWorld Meta
 
 *"You can't teach an AI to be wise by showing it only kindness."*
