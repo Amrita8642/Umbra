@@ -276,7 +276,43 @@ Before any NPC output reaches the agent, it passes through **Sentrix** — a PII
 
 ## 🚀 Try It Yourself
 
-### Option A — Just see the demo (no GPU needed)
+### Option A — The "OpenEnv" Ways to Work (Hackathon Criteria)
+
+Because UMBRA is deployed as a Hugging Face Space Docker container, it gives you 4 different ways to interact with it:
+
+**1. Interact with the remote Space directly:**
+Go to the live swagger UI and click "Try it out" to interact with the environment instantly online!
+👉 [https://amrita8642-umbra-meta.hf.space/docs](https://amrita8642-umbra-meta.hf.space/docs)
+
+**2. Install the client code from the repo:**
+Install the environment directly into your python project using pip:
+```bash
+pip install git+https://github.com/Amrita8642/Umbra-ShadowWorld-Meta.git
+```
+
+**3. Pull and run the container locally:**
+If you want to containerize the environment on your own local machine via Docker:
+```bash
+git clone https://github.com/Amrita8642/Umbra-ShadowWorld-Meta.git
+cd Umbra-ShadowWorld-Meta
+docker build -t umbra-env .
+docker run -p 7860:7860 umbra-env
+# Now visit http://localhost:7860/docs
+```
+
+**4. Run the FastAPI app locally via Python/Uvicorn:**
+Ditch docker and run the server immediately from your terminal:
+```bash
+git clone https://github.com/Amrita8642/Umbra-ShadowWorld-Meta.git
+cd Umbra-ShadowWorld-Meta
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 7860
+# Now visit http://localhost:7860/docs
+```
+
+---
+
+### Option B — Just see the demo (no GPU needed)
 ```bash
 git clone https://github.com/Amrita8642/Umbra-ShadowWorld-Meta.git
 cd Umbra-ShadowWorld-Meta
